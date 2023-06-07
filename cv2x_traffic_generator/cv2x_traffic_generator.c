@@ -61,7 +61,7 @@
 
 #include "srsran/phy/common/phy_common_sl.h"
 #include "srsran/phy/phch/pssch.h"
-#include "srsran/phy/phch/sci.h"
+#include "srsran/phy/phch/sci.h" // SCI - Sidelink Control Information
 #include "srsran/phy/rf/rf.h"
 #include "srsran/phy/ue/ue_sync.h"
 #include "srsran/phy/utils/debug.h"
@@ -402,38 +402,44 @@ int main(int argc, char** argv)
   }
   sleep(1);
 
-  srsran_ue_sl_t srsue_vue_sl;
+  srsran_ue_sl_t srsue_vue_sl; //- Create and initialize a (my guess is) virtual user-equipment sidelink object.
   srsran_ue_sl_init(&srsue_vue_sl, cell_sl, sl_comm_resource_pool, 0);
 
   /***** prepare TX data *******/
-  srsran_set_sci(&srsue_vue_sl.sci_tx, 1, REP_INTERVL, 0, false, 0, 4);
+  srsran_set_sci(&srsue_vue_sl.sci_tx, 1, REP_INTERVL, 0, false, 0, 4); //- Initialize Sidelink Control Information
 
   // Randomize tx data to fill the transport block
   // Transport block buffer
-  uint8_t tb[SRSRAN_SL_SCH_MAX_TB_LEN] = {};
+  uint8_t tb[SRSRAN_SL_SCH_MAX_TB_LEN] = {}; //-I found this in `phy_common_sl.h`: #define SRSRAN_SL_SCH_MAX_TB_LEN (48936) // 3GPP 36.306 v15.4.0 Table 4.1B-1
   struct timeval tv;
   gettimeofday(&tv, NULL);
-  srsran_random_t random_gen = srsran_random_init(tv.tv_usec);
-  for (int i = 0; i < srsue_vue_sl.pssch_tx.sl_sch_tb_len; i++) {
-    tb[i] = srsran_random_uniform_int_dist(random_gen, 0, 1);
+  //srsran_random_t random_gen = srsran_random_init(tv.tv_usec); //- Initialize a random number generator with a seed of the current microsecond
+  ////- Fill a complete transport block's worth of data (not sure how big, it seems to look up in a table.)
+  ////- hypothesis: perhaps the size of the transport block can vary depending on how the srsue_vue_sl was initialized/configured.
+  // for (int i = 0; i < srsue_vue_sl.pssch_tx.sl_sch_tb_len; i++) { 
+  //   tb[i] = srsran_random_uniform_int_dist(random_gen, 0, 1); //- Generate a random number between 0 and 1, using our seed
+  // }
+  uint8_t my_v2x_message[320] = {0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,0,0,0,1,0,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1,0,1,1,0,1,0,1,0,1,0,1,0,1,0,0,1,1,1,1,1,0,0,0,0,1,0,1,1,0,0,1,1,1,1,1,0,0,0,1,1,1,0,0,1,1,0,1,1,0,1,0,0,1,0,0,1,0,1,0,0,1,1,1,0,0,1,0,0,1,0,1,0,0,1,0,1,0,0,0,1,0,1,1,1,0,1,0,1,1,1,1,1,1,1,0,1,0,0,0,0,1,0,1,0,1,0,0,0,1,1,0,1,1,1,1,0,1,1,0,0,1,1,1,1,1,1,0,1,1,1,1,0,1,1,1,0,0,1,0,0,0,1,0,0,0,1,1,0,0,1,0,0,0,1,1,1,1,0,1,1,1,1,1,0,0,1,1,1,0,1,0,0,1,1,0,0,1,1,0,1,1,0,0,1,0,0,0,1,1,1,1,1,0,1,1,0,1,1,1,0,1,0,1,0,1,0,1,0,0,1,0,1,1,1,0,1,1,0,1,0,0,1,0,1,1,1,0,0,0,0,0,0,0,0,0,1,1,0,0,1,0,1,1,0,1,1,1,1,0,0,1,0,1,0,1,0,0,1,1,1,1,1,0,1,1,0,1,1,1,0,0,0,1,1,1,0,0,0};
+  for (int i = 0; i < 320; i++) {
+    tb[i] = my_v2x_message[i];
   }
 
   srsran_pssch_data_t data;
   data.ptr = tb;
 
-  srsran_sl_sf_cfg_t sf;
-  cf_t* signal_buffer_tx[REP_INTERVL] = {};
+  srsran_sl_sf_cfg_t sf; //- sf stands for "subframe?"
+  cf_t* signal_buffer_tx[REP_INTERVL] = {}; 
 
   fprintf(stdout, "creating signal buffers...\n");
   fflush(stdout);
-  for (int sf_idx = 0; sf_idx < REP_INTERVL; sf_idx++) {
+  for (int sf_idx = 0; sf_idx < REP_INTERVL; sf_idx++) { //- For every subframe index from 0 to 100...
 
     if (sf_config[sf_idx].l_sub_channel > 0) {
       if (debug_log) {
         fprintf(stdout, "signal_buffer %d\n", sf_idx);
         fflush(stdout);
       }
-      signal_buffer_tx[sf_idx] = srsran_vec_cf_malloc(srsue_vue_sl.sf_len);
+      signal_buffer_tx[sf_idx] = srsran_vec_cf_malloc(srsue_vue_sl.sf_len); //- ?? Seems like it's "allocate memory for that subframe's data"
       if (!signal_buffer_tx[sf_idx]) {
         perror("malloc");
         exit(-1);
@@ -442,8 +448,10 @@ int main(int argc, char** argv)
       data.sub_channel_start_idx = sf_config[sf_idx].sub_channel_start_idx;
       data.l_sub_channel         = sf_config[sf_idx].l_sub_channel;
 
-      sf.tti = sf_idx;
-      if (srsran_ue_sl_encode(&srsue_vue_sl, &sf, &data)) {
+      sf.tti = sf_idx; //- tti is probably "transmission time interval". I thought this was 1ms but here it is from 0 to 100.
+      
+      //- Attempt to encode a sidelink mesage (probably storing it in srsue_vue_sl) using our subframe (sf) and data.
+      if (srsran_ue_sl_encode(&srsue_vue_sl, &sf, &data)) { 
         ERROR("Error encoding sidelink\n");
         exit(-1);
       }
@@ -484,12 +492,12 @@ int main(int argc, char** argv)
       if (sf_config[tx_msec_offset % REP_INTERVL].l_sub_channel > 0) {
 
         int ret = srsran_rf_send_timed2(&radio,
-                                        signal_buffer_tx[tx_msec_offset % REP_INTERVL],
-                                        srsue_vue_sl.sf_len,
-                                        tx_time.full_secs,
-                                        tx_time.frac_secs,
-                                        true,
-                                        true);
+                                        signal_buffer_tx[tx_msec_offset % REP_INTERVL], //-"data"
+                                        srsue_vue_sl.sf_len, //-"nsamples"
+                                        tx_time.full_secs, // -"secs"
+                                        tx_time.frac_secs, //-"frac_secs"
+                                        true,              //-"is_start_of_burst"
+                                        true);             //-"is_end_of_burst"
         if (ret < 0) {
           ERROR("Error sending data: %d\n", ret);
         }
@@ -509,7 +517,7 @@ int main(int argc, char** argv)
         }
       }
 
-      tx_msec_offset++;
+      tx_msec_offset += 1000;
       if (tx_msec_offset == 1000) {
         tx_sec_offset++;
         tx_msec_offset = 0;
