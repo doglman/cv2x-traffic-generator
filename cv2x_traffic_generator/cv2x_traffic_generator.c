@@ -74,6 +74,12 @@
 
 bool keep_running = true;
 bool debug_log = false;
+
+//- Create a cellular sidelink object, with some default parameters.
+//-   .nof_prb = number of physical resource blocks. Should be 50 if 10 MHz channel, 100 if 20 MHz channel.
+//-   .tm = ?? guess: Transmission Mode 4, which is the mode where paramaters are self-selected without EnodeB's governance
+//-   .cp = ??
+//-   .N_sl_id = ??
 srsran_cell_sl_t cell_sl = {.nof_prb = 50, .tm = SRSRAN_SIDELINK_TM4, .cp = SRSRAN_CP_NORM, .N_sl_id = 19};
 
 typedef struct {
@@ -114,12 +120,12 @@ void args_default(prog_args_t* args)
   args->log_file_name          = NULL;
   args->rf_dev                 = "";
   args->rf_args                = "";
-  args->rf_freq                = 5.92e9;
+  args->rf_freq                = 5.92e9; // FIXME Should be 5.915e9
   args->rf_gain                = 80;
-  args->num_sub_channel        = 10;
-  args->mcs_idx                = 20;
-  args->sub_channel_start_idx  = 0;
-  args->l_sub_channel          = 2;
+  args->num_sub_channel        = 10; // Should be 10
+  args->mcs_idx                = 20; // "idx" - index. "MCS" - Modulation and Coding Scheme. (Component of an SCI message transmitted on the PSCCH)
+  args->sub_channel_start_idx  = 0; // "sub-channel start index"
+  args->l_sub_channel          = 2; // current guess is "l" is "length". So the "length" of the sub channel "array", i.e. the number of subchannels in our channel we'd like to be writing to.
 }
 
 void sig_int_handler(int signo)
@@ -145,7 +151,7 @@ void usage(prog_args_t* args, char* prog)
   fprintf(stdout, "\t-m mcs_idx [Default %d]\n", args->mcs_idx);
   fprintf(stdout, "\t-n num_sub_channel [Default for 50 prbs %d]\n", args->num_sub_channel);
   fprintf(stdout, "\t-o log_file_name.\n");
-  fprintf(stdout, "\t-p nof_prb [Default %d]\n", cell_sl.nof_prb);
+  fprintf(stdout, "\t-p nof_prb [Default %d]\n", cell_sl.nof_prb); //FIXME - Needs to be override to 100
   fprintf(stdout, "\t-r use_standard_lte_rates [Default %i]\n", args->use_standard_lte_rates);
   fprintf(stdout, "\t-s sub_channel_start_idx [Default %d]. If input_file_name is specified this will be ignored.\n", args->sub_channel_start_idx);
   fflush(stdout);
@@ -351,21 +357,26 @@ int main(int argc, char** argv)
   /***** Init *******/
   tx_metrics_t tx_metrics[REP_INTERVL] = {};
 
-  sf_config_t sf_config[REP_INTERVL] = {};
+  sf_config_t sf_config[REP_INTERVL] = {}; //- Create an array of subframe configurations (and then populate it)
+
   // if input_file_name is specified, read values from file, else use prog_args values
   if (prog_args.input_file_name) {
     fprintf(stdout, "Reading input file %s\n", prog_args.input_file_name);
     fflush(stdout);
     parse_input_file(prog_args.input_file_name, sf_config, prog_args.num_sub_channel);
   } else {
-    for (int sf_idx = 0; sf_idx < REP_INTERVL; sf_idx++) {
-      sf_config[sf_idx].sub_channel_start_idx = prog_args.sub_channel_start_idx;
-      sf_config[sf_idx].l_sub_channel = prog_args.l_sub_channel;
+    for (int sf_idx = 0; sf_idx < REP_INTERVL; sf_idx++) { //- For every subframe configuration...
+      //- sf_idx is probably "subframe index".
+      sf_config[sf_idx].sub_channel_start_idx = prog_args.sub_channel_start_idx; //- Store the starting index for that subframe
+      sf_config[sf_idx].l_sub_channel = prog_args.l_sub_channel; //- Store the "length" (i.e. maximum number of subchannels) that exist for our configuration.
     }
   }
 
   srsran_use_standard_symbol_size(prog_args.use_standard_lte_rates);
 
+
+  //- Declare and initialize a Sidelink communication resource pool (which is a big collection of resource blocks)
+  //-  Line 400 of `phy_common_sl.c` contains the function definition.
   srsran_sl_comm_resource_pool_t sl_comm_resource_pool;
 
   // init resource pool
@@ -374,6 +385,7 @@ int main(int argc, char** argv)
     return SRSRAN_ERROR;
   }
 
+  //- Attempt to find and connect to a radio (in our case, the EttusResearch USRP X410), passing in any provided arguments.
   srsran_rf_t radio;
   fprintf(stdout, "Opening RF device...\n");
   fflush(stdout);
@@ -382,6 +394,7 @@ int main(int argc, char** argv)
     exit(-1);
   }
 
+  //- Attempt to tune the radio to the user-provided frequency and sampling rate
   fprintf(stdout, "Set TX freq: %.6f MHz\n",
          srsran_rf_set_tx_freq(&radio, 0, prog_args.rf_freq) / 1e6);
   fprintf(stdout, "Set TX gain: %.1f dB\n", srsran_rf_set_tx_gain(&radio, prog_args.rf_gain));
@@ -402,11 +415,23 @@ int main(int argc, char** argv)
   }
   sleep(1);
 
-  srsran_ue_sl_t srsue_vue_sl; //- Create and initialize a (my guess is) virtual user-equipment sidelink object.
+  //- Create and initialize a (my guess is) virtual user-equipment sidelink object.
+  //-   Not sure why yet, since we already a cellular sidelink object `cell_sl`
+  srsran_ue_sl_t srsue_vue_sl; 
   srsran_ue_sl_init(&srsue_vue_sl, cell_sl, sl_comm_resource_pool, 0);
 
   /***** prepare TX data *******/
-  srsran_set_sci(&srsue_vue_sl.sci_tx, 1, REP_INTERVL, 0, false, 0, 4); //- Initialize Sidelink Control Information
+
+  //- Initialize Sidelink Control Information
+  //- (function definition is in ue_sl.c line 350)
+  //- `&srsue_vue_sl.sc_tx` - store result in the transmit portion of this sidelink object
+  //- `1` = "priority"
+  //- `REP_INTERVL` (default was 100) = "Resource reservation interval, in ms" TODO - LOOK UP WHAT THIS IS
+  //- `0` = "time gap"
+  //- `false` = "retransmission" TODO - FIXME - It's possible we need to set this (and the accompanying transmission format) if this is about re-sending the same message with a 3ms delay
+  //- `0` = "transmission format"
+  //- `4` = "mcs index" - Modulation and Coding Scheme index
+  srsran_set_sci(&srsue_vue_sl.sci_tx, 1, REP_INTERVL, 0, false, 0, 4); 
 
   // Randomize tx data to fill the transport block
   // Transport block buffer
@@ -437,7 +462,7 @@ int main(int argc, char** argv)
   fflush(stdout);
   for (int sf_idx = 0; sf_idx < REP_INTERVL; sf_idx++) { //- For every subframe index from 0 to 100...
 
-    if (sf_config[sf_idx].l_sub_channel > 0) {
+    if (sf_config[sf_idx].l_sub_channel > 0) { //- If we have data we'd like to transmit on that subframe...?
       if (debug_log) {
         fprintf(stdout, "signal_buffer %d\n", sf_idx);
         fflush(stdout);
@@ -451,9 +476,12 @@ int main(int argc, char** argv)
       data.sub_channel_start_idx = sf_config[sf_idx].sub_channel_start_idx;
       data.l_sub_channel         = sf_config[sf_idx].l_sub_channel;
 
-      sf.tti = sf_idx; //- tti is probably "transmission time interval". I thought this was 1ms but here it is from 0 to 100.
+      //- tti is probably "transmission time interval". I thought this was 1ms but here it is from 0 to 100.
+      //- It's possible that this time interval is a specific time, duration, and is based off of some base time.
+      sf.tti = sf_idx; 
       
       //- Attempt to encode a sidelink mesage (probably storing it in srsue_vue_sl) using our subframe (sf) and data.
+      //-   The source code seems to deal with both the shared and control channel stuff.
       if (srsran_ue_sl_encode(&srsue_vue_sl, &sf, &data)) { 
         ERROR("Error encoding sidelink\n");
         exit(-1);
@@ -461,6 +489,7 @@ int main(int argc, char** argv)
 
       write_tx_metrics(&srsue_vue_sl, &tx_metrics[sf_idx], sf_idx);
 
+      //- Take our encoded information and copy it over into a transmission buffer, which we will pull from when we want to send a message.
       memcpy(signal_buffer_tx[sf_idx], srsue_vue_sl.signal_buffer_tx, sizeof(cf_t) * srsue_vue_sl.sf_len);
     }
   }
@@ -468,21 +497,21 @@ int main(int argc, char** argv)
   /***** timing *******/
   srsran_timestamp_t start_time, tx_time, now;
 
-  get_start_time(&radio, &start_time);
+  get_start_time(&radio, &start_time); //- Retrieve the starting time from the radio?? and store it in &start_time
 
   uint32_t tx_sec_offset = 0;
   uint32_t tx_msec_offset = 0;
 
   while (keep_running) {
 
-    srsran_timestamp_copy(&tx_time, &start_time);
-    srsran_timestamp_add(&tx_time, tx_sec_offset, tx_msec_offset * 1e-3);
+    srsran_timestamp_copy(&tx_time, &start_time);                           //- Overwrite tx_time with start_time
+    srsran_timestamp_add(&tx_time, tx_sec_offset, tx_msec_offset * 1e-3);   //- Add a specific amount of offset to our start_time. Offset gets progressively larger as `while (keep_running)` loops.
 
-    srsran_rf_get_time(&radio, &now.full_secs, &now.frac_secs);
+    srsran_rf_get_time(&radio, &now.full_secs, &now.frac_secs); //- Get the current?? time from the radio and store it in `now`
 
     // if tx_time is in the past reset time
     if (srsran_timestamp_uint64(&now, srate) > srsran_timestamp_uint64(&tx_time, srate)) {
-      ERROR("tx_time is in the past (tx_time: %f, now: %f). Setting new start time.\n",
+      ERROR("tx_time is in the past (tx_time: %f, now: %f). Setting new start time.\n", //- This is cause for an error because it indicates the code ran super slow since tx_time was last calculated
             srsran_timestamp_real(&tx_time), srsran_timestamp_real(&now));
       get_start_time(&radio, &start_time);
 
@@ -520,7 +549,12 @@ int main(int argc, char** argv)
         }
       }
 
-      tx_msec_offset += 1000;
+      //- Increment transmission time offsets, which will be added to tx_time (after being reset to our start_time)
+      //-   Originally I had modified `tx_msec_offset` to increment by 1000 (to slow down transmissions), but now I realize this needs to be ++.
+      //-   Whether we do (or don't) send a message needs to be determined by the contents of the `sf_config[]` array.
+      //-   So if there is nothing to send, the loop will fly through the array, incrementing the tx_msec_offset time until it hits a message to send.
+      //-   Then, my assumption, the code will call `srsran_rf_send_timed2()` and won't return until the tx_time has come and the message has been sent.
+      tx_msec_offset++; 
       if (tx_msec_offset == 1000) {
         tx_sec_offset++;
         tx_msec_offset = 0;
