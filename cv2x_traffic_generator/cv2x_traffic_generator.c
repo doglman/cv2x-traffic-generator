@@ -423,6 +423,9 @@ int main(int argc, char** argv)
   for (int i = 0; i < 320; i++) {
     tb[i] = my_v2x_message[i];
   }
+  for (int i = 320; i < srsue_vue_sl.pssch_tx.sl_sch_tb_len; i++) {
+    tb[i] = 0;
+  }
 
   srsran_pssch_data_t data;
   data.ptr = tb;
